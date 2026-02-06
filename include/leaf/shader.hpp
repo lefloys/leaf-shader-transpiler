@@ -24,6 +24,7 @@ namespace lf {
 
 /*
 ** Function node layout: <type> <name> <args body> <func body>
+** Declaration node layout: <layout> <in/out/uniform/buffer> <type> <name>
 */
 
 
@@ -617,7 +618,7 @@ namespace lf {
 		void emit_bracket_close(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
 		void emit_bracket_open(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
 		void emit_comment(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
-		void emit_identifier(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
+		void emit_identifier(Emitter& emitter, std::stringstream& out) { out << "\"" << emitter.next().content << "\""; }
 		void emit_keyword(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
 		void emit_number(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
 		void emit_paren_close(Emitter& emitter, std::stringstream& out) { out << emitter.next().content; }
