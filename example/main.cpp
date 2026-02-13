@@ -1,39 +1,77 @@
 #define LEAF_SHADER_IMPLEMENTATION
-#include <leaf/shader.hpp>
-#include <iostream>
+#include <leaf/shader_transpiler.hpp>
+
 #include <chrono>
-#include <exception>
+#include <iostream>
+#include <string>
+
+static void print_header(const char* title) {
+	std::cout << "\n============================================================\n";
+	std::cout << title << "\n";
+	std::cout << "============================================================\n";
+}
 
 int main() {
-	const char* source = R"(
+	try {
+		const char* vertex_source = R"GLSL(
+// Vertex shader (no explicit locations for varyings)
+layout() in vec3 aPos;
+in vec2 aTex;
+in vec4 aCol;
 
-in vec3 aPos;
-layout(location=3) in vec4 aCo\
-l;
-out vec4 bCol; // Test comment
-void foo () /* Test Block */ ;
+out vec3 vPos;
+out vec2 vTex;
+out vec4 vCol;
 
 void main() {
-	bla;
-	/* Test Block */
-
-  }
-void foo2 () 
-{ // comment
-
+	vPos = aPos;
+	vTex = aTex;
+	vCol = aCol;
 }
-    )";
+)GLSL";
 
-	std::cout << "PreProcessed : \n" << source << "\n\n";
+		const char* fragment_source = R"GLSL(
+// Fragment shader (no explicit locations for varyings)
+in vec3 vPos;
+in vec2 vTex;
+in vec4 vCol;
+out vec4 oColor;
 
-	// Start timer
-	auto start = std::chrono::high_resolution_clock::now();
-	std::string processed = lf::ProcessShader(source);
+void main() {
+	oColor = vCol;
+}
+)GLSL";
 
-	// Stop timer
-	auto end = std::chrono::high_resolution_clock::now();
-	std::chrono::duration<double, std::milli> elapsed = end - start;
+		print_header("Original Vertex Shader");
+		std::cout << vertex_source << "\n";
 
-	std::cout << "Processed : \n" << processed << "\n\n";
-	std::cout << "Processing took: " << elapsed.count() << " ms\n";
+		print_header("Original Fragment Shader");
+		std::cout << fragment_source << "\n";
+
+
+		// 1) Link stages (assigns matching layout(location=...) to vert out / frag in)
+		{
+			print_header("LinkShaderStages (Vertex + Fragment)");
+
+			auto start = std::chrono::high_resolution_clock::now();
+			auto linked = lf::LinkShaderStages(vertex_source, fragment_source);
+			auto end = std::chrono::high_resolution_clock::now();
+
+			std::chrono::duration<double, std::milli> elapsed = end - start;
+
+			print_header("Linked Vertex Shader");
+			std::cout << linked[0] << "\n";
+
+			print_header("Linked Fragment Shader");
+			std::cout << linked[1] << "\n";
+
+			std::cout << "\nLinkShaderStages time: " << elapsed.count() << " ms\n";
+		}
+
+		return 0;
+	}
+	catch (const std::exception& e) {
+		std::cerr << "Fatal error: " << e.what() << "\n";
+		return 1;
+	}
 }
