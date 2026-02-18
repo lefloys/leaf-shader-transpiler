@@ -1,102 +1,51 @@
-#define LEAF_SHADER_IMPLEMENTATION
+#define LEAF_SHADER_LAYOUT_IMPLEMENTATION
+#include <leaf/shader_layout.hpp>
+#define LEAF_SHADER_TRANSPILER_IMPLEMENTATION
 #include <leaf/shader_transpiler.hpp>
 
-#include <chrono>
-#include <iostream>
-#include <string>
+struct Vertex1 {
+	glm::vec3 pos;
+	glm::vec2 uv;
+	glm::vec4 color;
 
-static void print_header(const char* title) {
-	std::cout << "\n============================================================\n";
-	std::cout << title << "\n";
-	std::cout << "============================================================\n";
-}
-
-	struct Vertex {
-		glm::vec3 pos;
-		glm::vec2 uv;
-		glm::vec4 color;
-
-		static inline auto layout = lf::make_vertex_layout<Vertex>(
-			lf::attribute("aPos", &Vertex::pos),
-			lf::attribute("aTex", &Vertex::uv),
-			lf::attribute("aCol", &Vertex::color)
-		);
-	};
-
-	// Example: one descriptor set with a UBO + a combined image sampler.
-	static inline auto set0 = lf::make_descriptor_set_layout<0>(
-		lf::descriptor_binding_auto(lf::DescriptorType::UniformBuffer, 1, lf::StageVertex | lf::StageFragment),
-		lf::descriptor_binding_auto(lf::DescriptorType::CombinedImageSampler, 1, lf::StageFragment)
+	static inline auto layout = lf::VertAttrLayout::Make<Vertex1>(
+		lf::VertAttr::Make("aPos", &Vertex1::pos),
+		lf::VertAttr::Make("aTex", &Vertex1::uv),
+		lf::VertAttr::Make("aCol", &Vertex1::color)
 	);
+};
 
-	static inline std::array<lf::DescriptorSetLayout, 1> sets = {
-		static_cast<lf::DescriptorSetLayout>(set0),
-	};
+struct Vertex2 {
+	glm::vec2 a;
+	glm::vec3 b;
 
-	struct MyPipeline {
-		static inline auto layout = lf::make_pipeline_layout_with_sets(
-			lf::with_descriptor_sets(sets.data(), static_cast<lf::u32>(sets.size())),
-			Vertex::layout
-		);
-	};
+	static inline auto layout = lf::VertAttrLayout::Make<Vertex2>(
+		lf::VertAttr::Make("a", &Vertex2::a),
+		lf::VertAttr::Make("b", &Vertex2::b)
+	);
+};
+inline auto vertex_layout = lf::VertLayout::Make(Vertex2::layout, Vertex1::layout);
+
+static inline auto set0 = lf::DescSetLayout::Make(
+	lf::DescBinding::Make("u_state", lf::descriptor_type::UniformBuffer, lf::shader_stage_flags::vertex_bit, 1),
+	lf::DescBinding::Make("bar", lf::descriptor_type::CombinedImageSampler, lf::shader_stage_flags::fragment_bit, 1)
+);
+
+static inline auto set1 = lf::DescSetLayout::Make(
+	lf::DescBinding::Make("foo", lf::descriptor_type::StorageBuffer, lf::shader_stage_flags::all, 4),
+	lf::DescBinding::Make("zoo", lf::descriptor_type::SampledImage, lf::shader_stage_flags::fragment_bit, 1)
+);
+
+// Global shader descriptor layout
+static inline auto shader_desc_layout = lf::DescLayout::Make(set0, set1);
+
+
+inline auto pipeline_layout = lf::PipelineLayout::Make(vertex_layout, shader_desc_layout);
 
 int main() {
-	try {
-		const char* vertex_source = R"GLSL(
-in vec3 aPos;
-in vec2 aTex;
-in vec4 aCol;
+	pipeline_layout.print_info();
 
-out vec2 vTex;
-out vec4 vCol;
-
-uniform mat4 u_MVP;
-
-void main() {
-	vTex = aTex;
-	vCol = aCol;
-	gl_Position = u_MVP * vec4(aPos, 1.0);
-}
-)GLSL";
-
-		const char* fragment_source = R"GLSL(
-in vec2 vTex;
-in vec4 vCol;
-
-uniform sampler2D t_albedo;
-
-out vec4 oColor;
-
-void main() {
-	oColor = texture(t_albedo, vTex) * vCol;
-}
-)GLSL";
-
-		print_header("Original Vertex Shader");
-		std::cout << vertex_source << "\n";
-
-		print_header("Original Fragment Shader");
-		std::cout << fragment_source << "\n";
-
-		print_header("ProcessPipelineShaders (Vertex + Fragment)");
-		auto start = std::chrono::high_resolution_clock::now();
-
-		auto processed = lf::ProcessPipelineShaders<MyPipeline>(vertex_source, fragment_source);
-
-		auto end = std::chrono::high_resolution_clock::now();
-		std::chrono::duration<double, std::milli> elapsed = end - start;
-
-		print_header("Processed Vertex Shader (watch layout(location=...), set=..., binding=...)");
-		std::cout << processed[0] << "\n";
-
-		print_header("Processed Fragment Shader (watch layout(location=...), set=..., binding=...)");
-		std::cout << processed[1] << "\n";
-
-		std::cout << "\nTotal processing time: " << elapsed.count() << " ms\n";
-		return 0;
-	}
-	catch (const std::exception& e) {
-		std::cerr << "Fatal error: " << e.what() << "\n";
-		return 1;
-	}
+	auto [set, binding] = pipeline_layout.find_binding("foo");
+	std::cout << "set " << set << ", binding " << binding << "\n";
+	return 0;
 }

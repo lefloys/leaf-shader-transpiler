@@ -1,294 +1,24 @@
-﻿#include <array>
-#include <cctype>
-#include <cstdint>
-#include <optional>
-#include <sstream>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
+﻿/*!
+** @file leaf/shader_transpiler.hpp
+** @author lefloysi
+*/
+#pragma once
 
+#include "leaf/shader_layout.hpp"
 #include <glm/glm.hpp>
 
+
+
 #ifdef __INTELLISENSE__
-#define LEAF_SHADER_IMPLEMENTATION
+#define LEAF_SHADER_TRANSPILER_IMPLEMENTATION
 #endif
+#ifdef LEAF_SHADER_TRANSPILER_IMPLEMENTATION
 
-namespace lf {
-	using u32 = std::uint32_t;
-	inline constexpr u32 AutoBinding = 0xFFFF'FFFFu;
+#include <array>
+#include <vector>
+#include <unordered_map>
+#include <sstream>
 
-	enum class DescriptorType : u32 {
-		UniformBuffer,
-		StorageBuffer,
-		CombinedImageSampler,
-		SampledImage,
-		StorageImage,
-		Sampler,
-	};
-
-	enum ShaderStageFlags : u32 {
-		StageNone = 0,
-		StageVertex = 1u << 0,
-		StageFragment = 1u << 1,
-		StageCompute = 1u << 2,
-		StageAll = 0xFFFF'FFFFu,
-	};
-
-	struct DescriptorBindingInfo {
-		u32 binding = 0;
-		DescriptorType type = DescriptorType::UniformBuffer;
-		u32 count = 1;
-		u32 stage_flags = StageNone;
-	};
-
-	struct DescriptorSetLayout {
-		u32 set = 0;
-		u32 binding_count = 0;
-		const DescriptorBindingInfo* bindings = nullptr;
-
-		const DescriptorBindingInfo& operator[](u32 index) const {
-			return bindings[index];
-		}
-	};
-
-	struct BindingDescriptor {
-		u32 binding;
-		DescriptorType type;
-		u32 count;
-		u32 stage_flags;
-
-		constexpr DescriptorBindingInfo to_info() const {
-			return DescriptorBindingInfo{ binding, type, count, stage_flags };
-		}
-	};
-
-	constexpr BindingDescriptor descriptor_binding(u32 binding, DescriptorType type, u32 count = 1,
-		u32 stage_flags = StageAll) {
-		return BindingDescriptor{ binding, type, count, stage_flags };
-	}
-
-	constexpr BindingDescriptor descriptor_binding_auto(DescriptorType type, u32 count = 1,
-		u32 stage_flags = StageAll) {
-		return BindingDescriptor{ AutoBinding, type, count, stage_flags };
-	}
-
-	template<u32 SetIndex, typename... Bindings>
-	struct DescriptorSetLayoutTyped {
-		static constexpr u32 binding_count = sizeof...(Bindings);
-		DescriptorBindingInfo bindings_storage[binding_count];
-
-		explicit DescriptorSetLayoutTyped(Bindings... bindings) {
-			std::array<BindingDescriptor, binding_count> descriptors{ bindings... };
-			std::unordered_set<u32> used_bindings;
-			used_bindings.reserve(binding_count);
-
-			u32 next_binding = 0;
-			for (u32 i = 0; i < binding_count; ++i) {
-				u32 binding = descriptors[i].binding;
-				if (binding == AutoBinding) {
-					while (used_bindings.contains(next_binding)) {
-						++next_binding;
-					}
-					binding = next_binding++;
-				}
-				else {
-					if (used_bindings.contains(binding)) {
-						throw std::runtime_error("DescriptorSetLayout: duplicate binding " + std::to_string(binding));
-					}
-					if (binding >= next_binding) {
-						next_binding = binding + 1;
-					}
-				}
-
-				used_bindings.insert(binding);
-				bindings_storage[i] = DescriptorBindingInfo{ binding, descriptors[i].type, descriptors[i].count, descriptors[i].stage_flags };
-			}
-		}
-
-		DescriptorSetLayout to_layout() const {
-			return DescriptorSetLayout{ SetIndex, binding_count, bindings_storage };
-		}
-
-		operator DescriptorSetLayout() const {
-			return to_layout();
-		}
-	};
-
-	template<u32 SetIndex, typename... Bindings>
-	auto make_descriptor_set_layout(Bindings... bindings) {
-		return DescriptorSetLayoutTyped<SetIndex, Bindings...>(bindings...);
-	}
-
-	struct VertexAttributeInfo {
-		const char* name;
-		const char* glsl_type;
-		u32 offset;
-		u32 size;
-		u32 component_count;
-	};
-
-	struct VertexLayout {
-		const char* vertex_type_name;
-		u32 stride;
-		u32 attribute_count;
-		const VertexAttributeInfo* attributes;
-
-		const VertexAttributeInfo& operator[](u32 index) const {
-			return attributes[index];
-		}
-	};
-
-	template<typename T>
-	struct VertexAttributeTraits;
-
-	template<>
-	struct VertexAttributeTraits<float> {
-		static constexpr const char* glsl_type = "float";
-		static constexpr u32 byte_size = sizeof(float);
-		static constexpr u32 component_count = 1;
-	};
-
-	template<>
-	struct VertexAttributeTraits<glm::vec2> {
-		static constexpr const char* glsl_type = "vec2";
-		static constexpr u32 byte_size = sizeof(glm::vec2);
-		static constexpr u32 component_count = 2;
-	};
-
-	template<>
-	struct VertexAttributeTraits<glm::vec3> {
-		static constexpr const char* glsl_type = "vec3";
-		static constexpr u32 byte_size = sizeof(glm::vec3);
-		static constexpr u32 component_count = 3;
-	};
-
-	template<>
-	struct VertexAttributeTraits<glm::vec4> {
-		static constexpr const char* glsl_type = "vec4";
-		static constexpr u32 byte_size = sizeof(glm::vec4);
-		static constexpr u32 component_count = 4;
-	};
-
-	template<typename VertexType, typename MemberType>
-	struct AttributeDescriptor {
-		const char* name;
-		MemberType VertexType::* member_ptr;
-
-		constexpr AttributeDescriptor(const char* n, MemberType VertexType::* ptr)
-			: name(n), member_ptr(ptr) {}
-
-		VertexAttributeInfo to_info() const {
-			return {
-				name,
-				VertexAttributeTraits<MemberType>::glsl_type,
-				static_cast<u32>(
-					reinterpret_cast<const char*>(&(static_cast<const VertexType*>(nullptr)->*member_ptr))-
-					reinterpret_cast<const char*>(static_cast<const VertexType*>(nullptr))
-				),
-				VertexAttributeTraits<MemberType>::byte_size,
-				VertexAttributeTraits<MemberType>::component_count
-			};
-		}
-	};
-
-	template<typename VertexType, typename MemberType>
-	constexpr auto attribute(const char* name, MemberType VertexType::* ptr) {
-		return AttributeDescriptor<VertexType, MemberType>(name, ptr);
-	}
-
-	template<typename VertexType, typename... Attributes>
-	struct VertexLayoutTyped {
-		static constexpr u32 attribute_count = sizeof...(Attributes);
-		VertexAttributeInfo attributes_storage[attribute_count];
-
-		VertexLayoutTyped(Attributes... attrs)
-			: attributes_storage{ attrs.to_info()... } {}
-
-		VertexLayout to_layout() const {
-			return VertexLayout{
-				typeid(VertexType).name(),
-				static_cast<u32>(sizeof(VertexType)),
-				attribute_count,
-				attributes_storage
-			};
-		}
-
-		operator VertexLayout() const {
-			return to_layout();
-		}
-
-		const VertexAttributeInfo& operator[](u32 index) const {
-			return attributes_storage[index];
-		}
-	};
-
-	template<typename VertexType, typename... Attributes>
-	auto make_vertex_layout(Attributes... attrs) {
-		return VertexLayoutTyped<VertexType, Attributes...>(attrs...);
-	}
-
-	struct PipelineLayout {
-		u32 vertex_layout_count = 0;
-		const VertexLayout* vertex_layouts = nullptr;
-		u32 descriptor_set_layout_count = 0;
-		const DescriptorSetLayout* descriptor_set_layouts = nullptr;
-
-		const VertexLayout& operator[](u32 index) const {
-			return vertex_layouts[index];
-		}
-	};
-
-	struct DescriptorSetsView {
-		const DescriptorSetLayout* sets = nullptr;
-		u32 count = 0;
-	};
-
-	constexpr DescriptorSetsView with_descriptor_sets(const DescriptorSetLayout* sets, u32 count) {
-		return DescriptorSetsView{ sets, count };
-	}
-
-	template<typename... VertexLayouts>
-	struct PipelineLayoutTypedWithSets {
-		static constexpr u32 vertex_layout_count = sizeof...(VertexLayouts);
-		std::tuple<VertexLayouts...> vertex_layout_storage;
-		std::array<VertexLayout, vertex_layout_count> vertex_layouts;
-		DescriptorSetsView sets;
-
-		PipelineLayoutTypedWithSets(DescriptorSetsView s, VertexLayouts... layouts)
-			: vertex_layout_storage(std::move(layouts)...)
-			, vertex_layouts(make_vertex_layouts(vertex_layout_storage, std::index_sequence_for<VertexLayouts...>{}))
-			, sets(s) {}
-
-		PipelineLayout to_layout() const {
-			return PipelineLayout{ vertex_layout_count, vertex_layouts.data(), sets.count, sets.sets };
-		}
-
-		operator PipelineLayout() const {
-			return to_layout();
-		}
-
-	private:
-		template<size_t... I>
-		static std::array<VertexLayout, vertex_layout_count> make_vertex_layouts(
-			const std::tuple<VertexLayouts...>& storage,
-			std::index_sequence<I...>) {
-			return { static_cast<VertexLayout>(std::get<I>(storage))... };
-		}
-	};
-
-	template<typename... VertexLayouts>
-	auto make_pipeline_layout_with_sets(DescriptorSetsView sets, VertexLayouts... layouts) {
-		return PipelineLayoutTypedWithSets<VertexLayouts...>(sets, layouts...);
-	}
-}
-
-
-
-#ifdef LEAF_SHADER_IMPLEMENTATION
 
 namespace lf {
 	using uchar = unsigned char;
@@ -644,7 +374,7 @@ namespace lf {
 			table[static_cast<size_t>(NodeType::Identifier)] = serialize_identifier;
 			table[static_cast<size_t>(NodeType::Literal)] = serialize_literal;
 			table[static_cast<size_t>(NodeType::StorageIn)] = serialize_storage_in;
-		 table[static_cast<size_t>(NodeType::StorageOut)] = serialize_storage_out;
+			table[static_cast<size_t>(NodeType::StorageOut)] = serialize_storage_out;
 			table[static_cast<size_t>(NodeType::StorageUniform)] = serialize_storage_uniform;
 			table[static_cast<size_t>(NodeType::StorageBuffer)] = serialize_storage_buffer;
 			table[static_cast<size_t>(NodeType::TranslationUnit)] = serialize_translation_unit;
@@ -713,7 +443,6 @@ namespace lf {
 			return table;
 		}
 		static constexpr auto EmitTable = build_emit_table();
-
 
 
 		static std::string consume_whitespace(Parser& parser) {
@@ -985,7 +714,6 @@ namespace lf {
 			const Token& nextTok = parser.peek_significant();
 			if (nextTok.type == TokenType::cBraceOpen) {
 				parser.next_significant(); // {
-
 				const size_t startCursor = parser.cursor;
 				int braceCount = 1;
 
@@ -1043,7 +771,7 @@ namespace lf {
 			out.children.push_back(std::move(layoutNode));
 
 			Node storageNode;
-		 storageNode.leadingWhitespace = consume_whitespace(parser);
+			storageNode.leadingWhitespace = consume_whitespace(parser);
 			const Token& storageTok = parser.next_significant();
 			switch (storageTok.type) {
 			case TokenType::kwIn: storageNode.type = NodeType::StorageIn; break;
@@ -1090,8 +818,7 @@ namespace lf {
 				fn(child, out);
 			}
 		}
-		static void serialize_end_of_file(const Node& node, TokenStream& out) {
-		}
+		static void serialize_end_of_file(const Node& node, TokenStream& out) {}
 		static void serialize_translation_unit(const Node& node, TokenStream& out) {
 			for (const Node& child : node.children) {
 				auto fn = SerializeTable[static_cast<size_t>(child.type)];
@@ -1461,250 +1188,26 @@ namespace lf {
 			return out;
 		}
 
-		// --- Vertex input injection (PipelineLayout -> layout(location=...)) ---
-
 		struct PipelineAttribute {
 			std::string_view glsl_type;
 			u32 location = 0;
 		};
 
-		static std::unordered_map<std::string, PipelineAttribute> build_pipeline_attribute_map(const PipelineLayout& pipeline) {
-			std::unordered_map<std::string, PipelineAttribute> by_name;
 
-			u32 next_location = 0;
-			for (u32 li = 0; li < pipeline.vertex_layout_count; ++li) {
-				const VertexLayout& vl = pipeline[li];
+		static std::array<std::string, 2> ProcessPipelineShaders(std::string_view vert_source, std::string_view frag_source) {
+			std::string vert_pre = detail::preprocess(vert_source);
+			std::string frag_pre = detail::preprocess(frag_source);
 
-				for (u32 ai = 0; ai < vl.attribute_count; ++ai) {
-					const VertexAttributeInfo& a = vl[ai];
-					const std::string key(a.name);
+			Node vert_ast = detail::parse(detail::lexical_analisys(std::move(vert_pre)));
+			Node frag_ast = detail::parse(detail::lexical_analisys(std::move(frag_pre)));
 
-					if (by_name.contains(key)) {
-						throw std::runtime_error("InjectVertexLayout: duplicate attribute name in PipelineLayout: '" + key + "'");
-					}
+			detail::link_varyings(vert_ast, frag_ast);
 
-					by_name.emplace(key, PipelineAttribute{
-						.glsl_type = a.glsl_type,
-						.location = next_location++,
-					});
-				}
-			}
+			std::string vert_out = detail::emit_token_stream(detail::serialize(vert_ast));
+			std::string frag_out = detail::emit_token_stream(detail::serialize(frag_ast));
 
-			return by_name;
+			return { std::move(vert_out), std::move(frag_out) };
 		}
-
-		static void inject_vertex_inputs(Node& vert_ast, const PipelineLayout& pipeline) {
-			const auto attr_map = build_pipeline_attribute_map(pipeline);
-
-			std::vector<DeclView> decls;
-			collect_decls(vert_ast, decls);
-
-			for (DeclView& d : decls) {
-				if (d.storage != NodeType::StorageIn) continue;
-
-				const std::string name(d.name);
-
-				auto it = attr_map.find(name);
-				if (it == attr_map.end()) {
-					throw std::runtime_error("InjectVertexLayout: shader declares vertex input '" + name + "' but it is not present in PipelineLayout");
-				}
-
-				const PipelineAttribute& expected = it->second;
-
-				if (std::string_view(d.type) != expected.glsl_type) {
-					throw std::runtime_error(
-						"InjectVertexLayout: type mismatch for vertex input '" + name +
-						"': shader='" + std::string(d.type) +
-						"' pipeline='" + std::string(expected.glsl_type) + "'");
-				}
-
-				u32 explicit_loc = 0;
-				if (get_location(*d.decl, explicit_loc)) {
-					if (explicit_loc != expected.location) {
-						throw std::runtime_error(
-							"InjectVertexLayout: explicit layout(location=" + std::to_string(explicit_loc) +
-							") does not match PipelineLayout for '" + name +
-							"' (expected " + std::to_string(expected.location) + ")");
-					}
-				}
-				else {
-					set_location(*d.decl, expected.location);
-				}
-			}
-		}
-
-		static void inject_descriptor_layouts(Node& ast, const PipelineLayout& pipeline) {
-			struct DescriptorSlot {
-				u32 set = 0;
-				u32 binding = 0;
-				DescriptorType type = DescriptorType::UniformBuffer;
-				bool used = false;
-			};
-
-			auto type_matches_prefix = [](DescriptorType type, char prefix) {
-				switch (prefix) {
-				case 'u':
-					return type == DescriptorType::UniformBuffer || type == DescriptorType::StorageBuffer;
-				case 't':
-					return type == DescriptorType::CombinedImageSampler || type == DescriptorType::SampledImage || type == DescriptorType::StorageImage;
-				case 's':
-					return type == DescriptorType::Sampler;
-				default:
-					return false;
-				}
-			};
-
-			std::vector<DescriptorSlot> slots;
-			slots.reserve(pipeline.descriptor_set_layout_count * 4);
-
-			for (u32 si = 0; si < pipeline.descriptor_set_layout_count; ++si) {
-				const DescriptorSetLayout& set = pipeline.descriptor_set_layouts[si];
-				for (u32 bi = 0; bi < set.binding_count; ++bi) {
-					const DescriptorBindingInfo& b = set[bi];
-					slots.push_back(DescriptorSlot{ set.set, b.binding, b.type, false });
-				}
-			}
-
-			auto find_slot = [&](u32 set, u32 binding) -> DescriptorSlot* {
-				for (auto& slot : slots) {
-					if (slot.set == set && slot.binding == binding) return &slot;
-				}
-				return nullptr;
-			};
-
-			auto find_next_slot = [&](std::optional<u32> set_filter, std::optional<u32> binding_filter, char prefix) -> DescriptorSlot* {
-				for (auto& slot : slots) {
-					if (slot.used) continue;
-					if (set_filter && slot.set != *set_filter) continue;
-					if (binding_filter && slot.binding != *binding_filter) continue;
-					if (!type_matches_prefix(slot.type, prefix)) continue;
-					return &slot;
-				}
-				return nullptr;
-			};
-
-			std::vector<DeclView> decls;
-			collect_decls(ast, decls);
-
-			for (DeclView& d : decls) {
-				if (d.storage != NodeType::StorageUniform) continue;
-				if (d.name.size() < 3) continue;
-				const char p0 = d.name[0];
-				const char p1 = d.name[1];
-				if (p1 != '_') continue;
-				if (p0 != 'u' && p0 != 't' && p0 != 's') continue;
-
-				u32 explicit_binding = 0;
-				u32 explicit_set = 0;
-				bool has_binding = false;
-				bool has_set = false;
-				{
-					const Node& layout = d.decl->children[0];
-					for (const Node& item : layout.children) {
-						if (item.type == NodeType::Binding && item.children.size() >= 2) {
-							u32 v{};
-							if (try_parse_u32(item.children[1].value, v)) {
-								explicit_binding = v;
-								has_binding = true;
-							}
-						}
-						if (item.type == NodeType::Set && item.children.size() >= 2) {
-							u32 v{};
-							if (try_parse_u32(item.children[1].value, v)) {
-								explicit_set = v;
-								has_set = true;
-							}
-						}
-					}
-				}
-
-				DescriptorSlot* slot = nullptr;
-				if (has_binding && has_set) {
-					slot = find_slot(explicit_set, explicit_binding);
-					if (!slot) {
-						throw std::runtime_error("InjectDescriptorLayouts: set=" + std::to_string(explicit_set) +
-							" binding=" + std::to_string(explicit_binding) + " not present in PipelineLayout");
-					}
-					if (!type_matches_prefix(slot->type, p0)) {
-						throw std::runtime_error("InjectDescriptorLayouts: type mismatch for '" + std::string(d.name) + "'");
-					}
-				}
-				else if (has_set && !has_binding) {
-					slot = find_next_slot(explicit_set, std::nullopt, p0);
-				}
-				else if (!has_set && has_binding) {
-					slot = find_next_slot(std::nullopt, explicit_binding, p0);
-				}
-				else {
-					slot = find_next_slot(std::nullopt, std::nullopt, p0);
-				}
-
-				if (!slot) {
-					throw std::runtime_error("InjectDescriptorLayouts: no available descriptor slot for '" + std::string(d.name) + "'");
-				}
-
-				slot->used = true;
-				explicit_set = slot->set;
-				explicit_binding = slot->binding;
-
-				Node& layout = d.decl->children[0];
-				std::vector<Node> kept;
-				kept.reserve(layout.children.size());
-				for (Node& c : layout.children) {
-					if (c.type == NodeType::Set || c.type == NodeType::Binding) continue;
-					kept.push_back(std::move(c));
-				}
-				layout.children = std::move(kept);
-
-				auto push_kv = [&](NodeType t, u32 value) {
-					Node n;
-					n.type = t;
-
-					Node assign;
-					assign.type = NodeType::Assign;
-					assign.leadingWhitespace = " ";
-
-					Node lit;
-					lit.type = NodeType::Literal;
-					lit.leadingWhitespace = " ";
-					lit.value = std::to_string(value);
-
-					n.children.push_back(std::move(assign));
-					n.children.push_back(std::move(lit));
-					layout.children.push_back(std::move(n));
-				};
-
-				push_kv(NodeType::Set, explicit_set);
-				push_kv(NodeType::Binding, explicit_binding);
-			}
-		}
-	} // namespace detail
-
-	static std::array<std::string, 2> ProcessPipelineShaders(
-		std::string_view vert_source,
-		std::string_view frag_source,
-		const PipelineLayout& pipeline) {
-		std::string vert_pre = detail::preprocess(vert_source);
-		std::string frag_pre = detail::preprocess(frag_source);
-
-		Node vert_ast = detail::parse(detail::lexical_analisys(std::move(vert_pre)));
-		Node frag_ast = detail::parse(detail::lexical_analisys(std::move(frag_pre)));
-
-		detail::inject_vertex_inputs(vert_ast, pipeline);
-		detail::inject_descriptor_layouts(vert_ast, pipeline);
-		detail::inject_descriptor_layouts(frag_ast, pipeline);
-		detail::link_varyings(vert_ast, frag_ast);
-
-		std::string vert_out = detail::emit_token_stream(detail::serialize(vert_ast));
-		std::string frag_out = detail::emit_token_stream(detail::serialize(frag_ast));
-
-		return { std::move(vert_out), std::move(frag_out) };
-	}
-
-	template<typename T>
-	std::array<std::string, 2> ProcessPipelineShaders(std::string_view vert_source, std::string_view frag_source) {
-		const PipelineLayout pipeline = static_cast<PipelineLayout>(T::layout);
-		return ProcessPipelineShaders(vert_source, frag_source, pipeline);
 	}
 }
 
