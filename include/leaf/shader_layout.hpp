@@ -100,6 +100,8 @@ namespace lf {
 	template<typename T, typename... Attrs>
 	struct VertAttrLayoutTyped {
 		using vertex_t = T;
+
+		static_assert((... && std::is_same_v<typename Attrs::vertex_t, T>), "All vertex attributes must come from the same vertex type T");
 		std::tuple<Attrs...> attrs;
 
 		VertAttrLayoutTyped(Attrs... a) : attrs(std::make_tuple(a...)) {}
@@ -123,7 +125,7 @@ namespace lf {
 	struct VertAttrLayout {
 		template<typename T, typename... Attrs>
 		static VertAttrLayoutTyped<T, Attrs...> Make(Attrs... attrs) {
-			return VertAttrLayoutTyped<T, Attrs...>(attrs...); // pass parameter pack directly
+			return VertAttrLayoutTyped<T, Attrs...>(attrs...);
 		}
 	};
 

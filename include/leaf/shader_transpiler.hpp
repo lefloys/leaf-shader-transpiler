@@ -6,7 +6,14 @@
 
 #include "leaf/shader_layout.hpp"
 #include <glm/glm.hpp>
+#include <string_view>
+#include <string>
+#include <tuple>
 
+namespace lf {
+	template<typename T>
+	std::tuple<std::string, std::string> InjectPipelineLayout(std::string_view vert, std::string_view& frag);
+}
 
 
 #ifdef __INTELLISENSE__
